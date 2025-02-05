@@ -32,7 +32,7 @@ students_second_half <- students[(1+length(students)/2):length(students)]
 # Column ordering
 d <- d[,base::intersect(names(d_ref), names(d))]
 
-d <- d %>% select(`Step Name`,)
+d <- d %>% select(`Step Name`, everything()) # Parser error circumventing
 
 d %>%
   filter(`Anon Student Id` %in% students_first_half) %>%
