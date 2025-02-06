@@ -17,17 +17,16 @@ d <- read_csv('LiveLab_top_15_MATHia_7x_classes_anon.csv') %>%
   mutate(`CF (tutor_event_time)` = Time) %>%
   mutate(`CF (step_id)` = `Step Name`) %>%
   mutate(`Selection` = `Step Name`) %>%
-  filter(Outcome %in% c('OK', 'OK_AMBIGUOUS', 'ERROR', 'INITAL_HINT')) %>%
   mutate(Outcome = ifelse(str_detect(Outcome, 'OK'), 'CORRECT', 'INCORRECT')) %>%
   mutate(`Total Num Hints` = NA) %>%
   mutate(`Student Response Subtype` = NA) %>%
-  mutate(`Transaction Id` = sapply(1:n(), function(x) digest(sample(letters, 10, replace = TRUE), algo = "md5")))
+  mutate(`Transaction Id` = sapply(1:n(), function(x) digest::digest(sample(letters, 10, replace = TRUE), algo = "md5")))
 
 (d$`Transaction Id` %>% unique() %>% length()) == nrow(d)
 
-students <- d$`Anon Student Id` %>% unique() %>% sort()
-students_first_half <- students[1:length(students)/2]
-students_second_half <- students[(1+length(students)/2):length(students)]
+#students <- d$`Anon Student Id` %>% unique() %>% sort()
+#students_first_half <- students[1:length(students)/2]
+#students_second_half <- students[(1+length(students)/2):length(students)]
 
 # Column ordering
 d <- d[,base::intersect(names(d_ref), names(d))]
@@ -35,9 +34,9 @@ d <- d[,base::intersect(names(d_ref), names(d))]
 d <- d %>% select(`Step Name`, everything()) # Parser error circumventing
 
 d %>%
-  filter(`Anon Student Id` %in% students_first_half) %>%
-  write_delim('LiveLab_top_15_MATHia_7x_classes_anon-firsthalf.txt', delim='\t')
+  #filter(`Anon Student Id` %in% students_first_half) %>%
+  write_delim('LiveLab_top_15_MATHia_7x_classes_anon-full.txt', delim='\t')
 
-d %>%
-  filter(`Anon Student Id` %in% students_second_half) %>%
-  write_delim('LiveLab_top_15_MATHia_7x_classes_anon-secondhalf.txt', delim='\t')
+#d %>%
+#  filter(`Anon Student Id` %in% students_second_half) %>%
+#  write_delim('LiveLab_top_15_MATHia_7x_classes_anon-secondhalf.txt', delim='\t')
