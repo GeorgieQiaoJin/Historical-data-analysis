@@ -4,7 +4,7 @@ read_clean <- function(f) {
   return(
    read_csv(f) %>%
      janitor::clean_names() %>%
-     select(anon_student_id, time=time_34, detector_name, value)
+     select(anon_student_id, time=time_3, detector_name, value)
   )
 }
 
@@ -13,7 +13,12 @@ d_detector <- map_dfr(fs, read_clean) %>%
   filter(detector_name != 'False') %>%
   mutate(
     value = ifelse(str_detect(value, '^0'), 0, 1) # naive recoding for now
-  ) %>%
+  ) 
+
+d_detector <- d_detector %>%
+  group_by(anon_student_id, time, detector_name) %>%
+  summarize(value = max(value, na.rm=TRUE)) %>% # repeated seconds
+  ungroup() %>%
   pivot_wider(names_from = detector_name, values_from = value, values_fill = 0)
 
 library(lubridate) # Following python code
@@ -66,3 +71,10 @@ m <- glmer(got_help ~ (1 | anon_student_id) + (1 | cf_class_id) + requested_help
       d_model, family='binomial', verbose=2, nAGQ=0)
 
 sjPlot::tab_model(m)
+performance::icc(m, by_group = TRUE)
+
+m <- glmer(got_help ~ (1 | anon_student_id) + (1 | cf_class_id) + requested_help + idle, 
+           d_model, family='binomial', verbose=2, nAGQ=0)
+
+sjPlot::tab_model(m)
+performance::icc(m, by_group = TRUE)
