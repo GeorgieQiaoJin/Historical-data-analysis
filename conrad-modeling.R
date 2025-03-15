@@ -1,5 +1,8 @@
 library(tidyverse)
 
+#d <- read_csv('final_filtered_test_file_15mins.csv')
+#d <- read_csv('final_filtered_test_file_session.csv')
+
 read_clean <- function(f) {
   return(
    read_csv(f) %>%
@@ -25,7 +28,7 @@ library(lubridate) # Following python code
 d_detector$time <- ymd_hms(d_detector$time, tz = "UTC")
 attr(d_detector$time, "tzone") <- NULL  
 
-d <- read_csv('Updated_LiveLab.csv') %>%
+d <- read_csv('New_LiveLab.csv') %>%
   janitor::clean_names() %>%
   mutate(
     requested_help = ifelse(help_level>0, 1, 0),
@@ -88,6 +91,65 @@ m <- glmer(got_help ~ (1 | anon_student_id) + (1 | cf_class_id) + requested_help
            d_model, family='binomial', verbose=2, nAGQ=0)
 sjPlot::tab_model(m)
 performance::icc(m, by_group = TRUE)
+
+# The relationship between the detectors and receiving teacher help/system hints help during difficult moments.
+d_time_ref <- read_csv('final_filtered_test_file_15mins.csv') %>%
+  janitor::clean_names() %>%
+  mutate(time = time %>% as.POSIXct() %>% lubridate::round_date("1 mins")) %>%
+  distinct(cf_class_id, time) %>% # Get difficult class moments
+  mutate(challenge_moment = TRUE)
+
+d_model_challenge <- d_model %>%
+  mutate(time = time %>% as.POSIXct() %>% lubridate::round_date("15 mins")) %>%
+  left_join(d_time_ref, by=c('cf_class_id', 'time')) %>%
+  mutate(challenge_moment = ifelse(is.na(challenge_moment), 0, 1))
+
+m <- glmer(got_help ~ (1 | anon_student_id) + (1 | cf_class_id) + 
+             requested_help*challenge_moment + 
+             idle*challenge_moment + 
+             system_misuse*challenge_moment + 
+             struggle*challenge_moment + 
+             student_doing_well*challenge_moment, 
+           d_model_challenge, family='binomial', verbose=2, nAGQ=0)
+sjPlot::tab_model(m)
+performance::icc(m, by_group = TRUE)
+
+m_ror <- glmer(got_help ~ challenge_moment * idle + (1 | anon_student_id), 
+               data = d_model_challenge, family = "binomial")
+
+coefs_ror <- tidy(m_ror, effects = "fixed") %>%
+  filter(term != "(Intercept)") %>%
+  mutate(odds_ratio = exp(estimate),
+         lower_CI = exp(estimate - 1.96 * std.error),
+         upper_CI = exp(estimate + 1.96 * std.error))
+
+# Display relative odds ratios
+print(coefs_ror)
+
+# By class --> sparse data
+library(broom.mixed)
+coefs <- d_model %>%
+  group_by(cf_class_id) %>%
+  group_modify(~ {
+    model <- glmer(got_help ~ (1 | anon_student_id) + 
+                     requested_help + idle + system_misuse + struggle + student_doing_well, 
+                   data = ., family = 'binomial', nAGQ = 0)
+    tidy(model) %>% filter(effect == "fixed") %>% mutate(cf_class_id = unique(.x$cf_class_id))
+  }) %>%
+  ungroup() %>%
+  filter(std.error<50) %>%
+  filter(term!='(Intercept)')
+
+ggplot(coefs, aes(x = term, y = estimate, color = cf_class_id, group = cf_class_id)) +
+  geom_point(position = position_dodge(width = 0.5)) +
+  geom_errorbar(aes(ymin = estimate - std.error, ymax = estimate + std.error), 
+                width = 0.2, position = position_dodge(width = 0.5)) +
+  theme_minimal() +
+  labs(x = "Predictors", y = "Coefficient Estimate", color = "Class ID") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+
 
 d_ranef <- ranef(m)$anon_student_id %>%
   rownames_to_column('anon_student_id') %>%
