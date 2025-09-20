@@ -5,16 +5,82 @@ d <- read_csv('session_level_data_with_help (1).csv') %>%
   janitor::clean_names() %>%
   filter(class_session_type=='classwork')
 
+# 2x2 table
+tab <- table(d$helped_session, d$prior_visits > 0)
+tab
+
+# Chi-square test
+chisq.test(tab)
+
+# Frequencies (counts and proportions)
+prop.table(tab, margin = 2)  # column proportions
+
+
+library(tidyverse)
+
+# Compute proportions and exact binomial CIs
+library(tidyverse)
+
+# Summarise with exact binomial CIs, filter <= 5
+d_help <- d %>%
+  filter(prior_visits <= 5) %>%
+  group_by(prior_visits) %>%
+  summarise(
+    n_sessions = n(),
+    n_helped = sum(helped_session == TRUE, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  rowwise() %>%
+  mutate(
+    prop_helped = n_helped / n_sessions,
+    ci = list(binom.test(n_helped, n_sessions)$conf.int)
+  ) %>%
+  mutate(
+    ci_low = ci[[1]],
+    ci_high = ci[[2]]
+  ) %>%
+  select(-ci) %>%
+  ungroup()
+
+# Plot with labels above error bars
+p <- ggplot(d_help, aes(x = factor(prior_visits), y = prop_helped)) +
+  geom_col(fill = "steelblue") +
+  geom_errorbar(aes(ymin = ci_low, ymax = ci_high), width = 0.2) +
+  geom_text(aes(y = ci_high, label = paste0("n=", n_sessions)),
+            vjust = -0.5, size = 3.2) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1), expand = expansion(mult = c(0, .1))) +
+  labs(
+    x = "Number of prior visits",
+    y = "% of receiving teacher help"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.title = element_text(face = "bold")
+  )
+
+# Export to ACM LAK single-column size (~3.25 in wide)
+ggsave("help_by_prior_visits.pdf", p,
+       width = 3.25*2, height = 2.5*1.6, units = "in")
+
+
+
 m <- glmer(helped_session ~ 
              prior_visits + 
-             #relative_student_delayed_start + 
+             relative_student_delayed_start* 
              idle + 
-             #class_session_size + 
+             class_session_size + 
              (1 | anon_student_id) + (1 | class), d,
            family='binomial', verbose=2)
 
 sjPlot::tab_model(m)
 performance::icc(m, by_group = TRUE)
+
+## Teachers --> invest less time in idle students next time as it's less effective?
+## --> aggregate subset idle by visited or not revisited
+# Don't have monitoring score
+
+# How is mathia monitoring calculated?
 
 # Notes for Georgie meeting 8/19:
 
@@ -37,6 +103,7 @@ d <- d_raw %>%
     helped_session = as.integer(helped_session)
   ) %>%
   arrange(anon_student_id, class_session_end_time) %>%
+  #mutate(idle = relative_student_delayed_start) %>%
   group_by(anon_student_id) %>%
   mutate(
     session_index = dplyr::row_number(),
@@ -402,4 +469,112 @@ p4 <- ggplot(lorenz_df, aes(x = cum_students, y = cum_help_share)) +
   pub_theme
 p4
 ggsave("P4_lorenz_help_distribution.pdf", p4, width = 6, height = 6)
+
+
+d
+
+##
+
+names(d)
+
+d_log <- read_csv('New_LiveLab.csv') %>%
+  janitor::clean_names()
+
+d_afm <- d_log %>%
+  filter(attempt_at_step==1) %>%
+  arrange(time) %>%
+  filter(!is.na(kc_model_mat_hia)) %>%
+  filter(!is.na(outcome)) %>%
+  mutate(correct = ifelse(outcome=='OK', 1, 0)) %>%
+  select(student=anon_student_id, kc=kc_model_mat_hia, time, correct) %>%
+  group_by(student, kc) %>%
+  mutate(opportunity = 1:n()) %>%
+  ungroup() 
+
+m_afm <- glmer(correct ~ opportunity + (1|student) + (1|kc), d_afm, verbose=2, nAGQ=0, family='binomial')
+
+d_afm['pred'] <- predict(m_afm, d_afm, type='response') %>% as.numeric()
+
+sjPlot::tab_model(m_afm)
+
+summary(m_afm)
+
+library(dplyr)
+library(lubridate)
+
+# mark first 0.80 crossing per (student, kc)
+d_cross <- d_afm %>%
+  arrange(student, kc, time) %>%
+  group_by(student, kc) %>%
+  mutate(
+    lag_pred = lag(pred),
+    crossed  = pred >= 0.80 & (is.na(lag_pred) | lag_pred < 0.80)
+  ) %>%
+  ungroup()
+
+# take the FIRST crossing per (student, kc)
+first_cross <- d_cross %>%
+  filter(crossed) %>%
+  group_by(student, kc) %>%
+  slice_min(time, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  mutate(date = as.Date(time))
+
+# daily count of unique new KCs mastered per student
+daily_new_kc <- first_cross %>%
+  count(student, date, name = "n_new_kc") %>%
+  complete(student, date, fill=list('n_new_kc'=0))
+
+daily_new_kc
+
+d2 <- d %>%
+  mutate(date = as.Date(class_session_start_time)) %>%
+  left_join(daily_new_kc, by=c('anon_student_id'='student', 'date'='date'))
+
+# --- CLPM: helped_session ↔ n_new_kc (continuous) using d2 -------------------
+library(dplyr)
+library(tidyr)
+library(lavaan)
+
+# 1) Order by student and time, then lag within anon_student_id
+d2_clpm <- d2 %>%
+  arrange(anon_student_id, date) %>%
+  group_by(anon_student_id) %>%
+  mutate(
+    lag_helped = lag(helped_session, 1),
+    lag_newkc  = lag(n_new_kc, 1)
+  ) %>%
+  ungroup() %>%
+  drop_na(helped_session, n_new_kc, lag_helped, lag_newkc)
+
+# 2) CLPM syntax
+model_clpm_help_newkc <- '
+  # Stability & cross-lagged effects
+  helped_session ~ aH*lag_helped + bH*lag_newkc
+  n_new_kc       ~ aK*lag_newkc  + bK*lag_helped
+
+  # Residual covariance within session
+  helped_session ~~ n_new_kc
+
+  # Covariance among lagged predictors
+  lag_helped ~~ lag_newkc
+'
+
+# 3) Fit model (helped_session binary, n_new_kc continuous)
+fit_clpm_help_newkc_d2 <- sem(
+  model_clpm_help_newkc,
+  data = d2_clpm,
+  ordered = c("helped_session","lag_helped"),
+  estimator = "WLSMV",
+  meanstructure = TRUE,
+  missing = "pairwise"
+)
+
+# 4) Summaries and hypothesis tests
+summary(fit_clpm_help_newkc_d2, standardized = TRUE, rsquare = TRUE)
+
+lavTestWald(fit_clpm_help_newkc_d2, constraints = 'bH == 0')  # newkc_{t-1} -> help_t
+lavTestWald(fit_clpm_help_newkc_d2, constraints = 'bK == 0')  # help_{t-1} -> newkc_t
+lavTestWald(fit_clpm_help_newkc_d2, constraints = c('bH == 0','bK == 0'))  # joint
+lavTestWald(fit_clpm_help_newkc_d2, constraints = 'bH == bK')              # dominance
 
